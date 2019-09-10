@@ -3,7 +3,7 @@
 #
 # Description:
 # Load CSV file into Oracle table.  This can be called without any parameters
-# which case user will be prompted.  
+# so user will be prompted.  
 # Script can also be invoked as follows:
 #   python csv_load.py [d|t|s|p] [OracleTable] [CSV File]
 # where
@@ -15,6 +15,7 @@
 # Date       By        Comment
 # ---------- --------- -----------------------------------------------------
 # 09/05/2019 jhoang    Original release.
+# 09/10/2019 jhoang    Add generation of acknowledgment and error files.
 # ============================================================================
 
 import os
@@ -69,14 +70,17 @@ sql = "select column_name" \
 def GetTable (itb, cur):
     global vals
     global tbnm
+    global ncol
     tbnm = itb.upper ()
     cur.arraysize = 1000
     try:
         cur.execute (sql, tbn=tbnm)
         tbdef = cur.fetchmany()
         lim = ''
+        ncol = 0
         for i in range (len(tbdef)):
             vals = vals + lim + ':' + str(i+1)
+            ncol += 1
             lim = ','
     except:
         print (sys.exc_info() [0])
@@ -117,6 +121,7 @@ else:
 # Get Oracle table to load
 # ====================================================================
 
+ncol = 0
 vals = ''
 cur  = con.cursor ()
 
@@ -168,34 +173,83 @@ else:
 # ====================================================================
 
 nrow      = 0
+nerr      = 0
 inp_array = []
 dt_start  = datetime.datetime.now()
 reader    = csv.reader (csvfile, delimiter='|', quotechar='"')
+ackfn      = "ACK_" + tbnm + "_" + dt_start.strftime ("%Y%m%d") + ".csv"
+errfn      = "ERR_" + tbnm + "_" + dt_start.strftime ("%Y%m%d") + ".csv"
 
 for lin in reader:
     nrow += 1
-    if nrow > 1:
+    if nrow == 1:
+        nfields = len (lin)
+        if ncol != nfields:
+            print ("Error - Num Oracle columns (",ncol,") does not match Num of Fields in CSV file (",len(lin),")")
+            exit ()
+
+        cridx   = lin.index ('ECDR_CREATE_DATE')
+        upidx   = lin.index ('ECDR_UPDATE_DATE')
+        tyidx   = lin.index ('RECORD_TYP')
+        ackfile = open (ackfn, 'w', newline='')
+        ackfile.write ("ECDR_Audit_Key|ECDR_CREATE_DATE|ECDR_UPDATE_DATE|ECDR_RECORD_TYP|MERIT_Audit_Key|MERIT_CREATE_DATE|MERIT_UPDATE_DATE|MERIT_RECORD_TYP|LOAD_SUCCESSFUL\n")
+
+    else:
         row = tuple (lin)
         inp_array.append (lin)
+
+    # ================================================================
+    # Insert Every 500 Rows
+    # ================================================================
+
     if nrow % 500 == 0:
         cur.executemany (ins_sql, inp_array, batcherrors=True)
         for err in cur.getbatcherrors():
-            print ("Error", error.message, "at row offset", err.offset)
+            nerr += 1
+            if nerr == 1:
+                errfile = open (errfn, 'w', newline='')
+                errfile.write ("Audit_Key|ECDR_CREATE_DATE|ECDR_UPDATE_DATE|ECDR_RECORD_TYP|ERROR_CAUSE\n")
+            errfile.write (inp_array[err.offset][0]+"|"+inp_array[err.offset][cridx]+"|"+inp_array[err.offset][upidx]+"|"+inp_array[err.offset][tyidx]+"|"+err.message+"\n")
+        for lst in inp_array:
+            ackfile.write (lst[0]+"|"+lst[cridx]+"|"+lst[upidx]+"|"+lst[tyidx]+"|||||Y\n")
         inp_array = []
+
+# ====================================================================
+# Insert Remaining Rows 
+# ====================================================================
 
 if nrow % 500 != 0:
     cur.executemany (ins_sql, inp_array, batcherrors=True)
+    for lst in inp_array:
+        ackfile.write (lst[0]+"|"+lst[cridx]+"|"+lst[upidx]+"|"+lst[tyidx]+"|||||Y\n")
     for err in cur.getbatcherrors():
-        print ("Error", error.message, "at row offset", err.offset)
+        nerr += 1
+        if nerr == 1:
+            errfile = open (errfn, 'w', newline='')
+            errfile.write ("Audit_Key|ECDR_CREATE_DATE|ECDR_UPDATE_DATE|ECDR_RECORD_TYP|ERROR_CAUSE\n")
+        errfile.write (inp_array[err.offset][0]+"|"+inp_array[err.offset][cridx]+"|"+inp_array[err.offset][upidx]+"|"+inp_array[err.offset][tyidx]+"|"+err.message+"\n")
 
+
+# ====================================================================
+# Output Statistics and Commit/Cleanup
+# ====================================================================
 
 dt_end = datetime.datetime.now()
-print (tbnm+" Number of Row(s) Loaded = " + str (nrow-1))
-print ("Date/Time Started: " + dt_start.strftime ("%m/%d/%Y %H:%M:%S"))
-print ("Date/Time Ended:   " + dt_end.strftime ("%m/%d/%Y %H:%M:%S"))
+print ("Table:", tbnm)
+print ("Number of Row(s) Loaded: " + str (nrow-1-nerr))
+print ("Number of Errors:        " + str (nerr))
+print ("Date/Time Started:       " + dt_start.strftime ("%m/%d/%Y %H:%M:%S"))
+print ("Date/Time Ended:         " + dt_end.strftime ("%m/%d/%Y %H:%M:%S"))
+print ("Acknowledgment File:     " + ackfn)
+if nerr > 0:
+    print ("Error File:              " + errfn)
 
 con.commit ()
 cur.close ()
 con.close ()
 csvfile.close ()
-exit ()
+ackfile.close ()
+if nerr > 0:
+    errfile.close ()
+
+exit()
