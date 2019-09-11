@@ -16,6 +16,7 @@
 # ---------- --------- -----------------------------------------------------
 # 09/05/2019 jhoang    Original release.
 # 09/10/2019 jhoang    Add generation of acknowledgment and error files.
+# 09/11/2019 jhoang    Remove error record(s) from acknowledgment.
 # ============================================================================
 
 import os
@@ -31,7 +32,7 @@ sid = {'d': 'localhost:12000/ESSORAD'
       ,'s': 'localhost:14000/ESSORAS'
       ,'p': 'localhost:10000/ESSORAP'}
 dbe = ('d','t','s','p')
-pwd = {'d': 'SamplePW', 't': 'SamplePW', 's': 'SamplePW', 'p': 'SamplePW'}
+pwd = {'d': 'ChangeMeJ', 't': 'ChangeMeJ', 's': 'ChangeMeJ', 'p': 'ChangeMeJ'}
 
 class MyException (Exception):
     pass
@@ -210,6 +211,7 @@ for lin in reader:
                 errfile = open (errfn, 'w', newline='')
                 errfile.write ("Audit_Key|ECDR_CREATE_DATE|ECDR_UPDATE_DATE|ECDR_RECORD_TYP|ERROR_CAUSE\n")
             errfile.write (inp_array[err.offset][0]+"|"+inp_array[err.offset][cridx]+"|"+inp_array[err.offset][upidx]+"|"+inp_array[err.offset][tyidx]+"|"+err.message+"\n")
+            inp_array.remove (inp_array[err.offset])
         for lst in inp_array:
             ackfile.write (lst[0]+"|"+lst[cridx]+"|"+lst[upidx]+"|"+lst[tyidx]+"|||||Y\n")
         inp_array = []
@@ -220,14 +222,15 @@ for lin in reader:
 
 if nrow % 500 != 0:
     cur.executemany (ins_sql, inp_array, batcherrors=True)
-    for lst in inp_array:
-        ackfile.write (lst[0]+"|"+lst[cridx]+"|"+lst[upidx]+"|"+lst[tyidx]+"|||||Y\n")
     for err in cur.getbatcherrors():
         nerr += 1
         if nerr == 1:
             errfile = open (errfn, 'w', newline='')
             errfile.write ("Audit_Key|ECDR_CREATE_DATE|ECDR_UPDATE_DATE|ECDR_RECORD_TYP|ERROR_CAUSE\n")
         errfile.write (inp_array[err.offset][0]+"|"+inp_array[err.offset][cridx]+"|"+inp_array[err.offset][upidx]+"|"+inp_array[err.offset][tyidx]+"|"+err.message+"\n")
+        inp_array.remove (inp_array[err.offset])
+    for lst in inp_array:
+        ackfile.write (lst[0]+"|"+lst[cridx]+"|"+lst[upidx]+"|"+lst[tyidx]+"|||||Y\n")
 
 
 # ====================================================================
